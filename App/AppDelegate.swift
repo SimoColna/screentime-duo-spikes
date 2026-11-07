@@ -41,10 +41,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication,
-                     didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        let isCloudKit = CKNotification(fromRemoteNotificationDictionary: userInfo) != nil
-        let ok = await AppModel.shared.syncNow(reason: isCloudKit ? "ckPush" : "push")
-        return ok ? .newData : .failed
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        let reason = CKNotification(fromRemoteNotificationDictionary: userInfo) != nil ? "ckPush" : "push"
+        Task { @MainActor in
+            let ok = await AppModel.shared.syncNow(reason: reason)
+            completionHandler(ok ? .newData : .failed)
+        }
     }
 
     // MARK: Background refresh (fallback domanda 2)

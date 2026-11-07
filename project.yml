@@ -40,6 +40,8 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Necessario perche' il link d'invito CloudKit apra l'app.
         CKSharingSupported: true
         UIBackgroundModes:
