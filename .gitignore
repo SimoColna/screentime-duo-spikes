@@ -1,0 +1,14 @@
+# Generato da XcodeGen
+*.xcodeproj
+# Generati da XcodeGen da project.yml (info/entitlements)
+App/Info.plist
+Monitor/Info.plist
+App/DuoSpike.entitlements
+Monitor/DuoMonitor.entitlements
+# Xcode
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+build.log
+.DS_Store

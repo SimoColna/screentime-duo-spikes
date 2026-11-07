@@ -1,0 +1,16 @@
+// Configurazione condivisa da tutti i target.
+// Modifica SOLO questo file prima di `xcodegen generate` (o anche dopo: e' letto da Xcode a ogni build).
+
+// Team ID a 10 caratteri (Xcode > Settings > Accounts, oppure developer.apple.com > Membership).
+// Lascialo vuoto e sceglilo da Xcode se preferisci.
+DEVELOPMENT_TEAM =
+
+// Deve essere univoco e registrabile nel TUO account (es. com.tuonome.duospike).
+BUNDLE_ID_PREFIX = com.example.duospike
+
+// Derivati: in genere non serve toccarli.
+APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX)
+CLOUDKIT_CONTAINER_ID = iCloud.$(BUNDLE_ID_PREFIX)
+
+MARKETING_VERSION = 0.1
+CURRENT_PROJECT_VERSION = 1
