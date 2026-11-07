@@ -12,15 +12,14 @@ final class SharedSettings {
         static let selection = "selection"
         static let threshold = "thresholdMinutes"
         static let activeThreshold = "activeThresholdMinutes"
+        static let activeLadder = "activeLadderPercents"
         static let includesPast = "includesPastActivity"
         static let monitoringStartDay = "monitoringStartDay"
         static let displayName = "displayName"
-        static let probeNetwork = "probeNetwork"
-        static let probeCloudKit = "probeCloudKit"
-        static let role = "coupleRole"
-        static let zoneName = "zoneName"
-        static let zoneOwner = "zoneOwnerName"
         static let userId = "userId"
+        static let probeNetwork = "probeNetwork"
+        static let probeURL = "probeURL"
+        static let probeNotification = "probeNotification"
     }
 
     /// FamilyActivitySelection codificata in JSON (la codifica avviene nell'app).
@@ -41,6 +40,12 @@ final class SharedSettings {
         set { defaults.set(newValue, forKey: Key.activeThreshold) }
     }
 
+    /// Gradini (percentuali) effettivamente registrati con l'ultimo startMonitoring.
+    var activeLadderPercents: [Int] {
+        get { defaults.array(forKey: Key.activeLadder) as? [Int] ?? [] }
+        set { defaults.set(newValue, forKey: Key.activeLadder) }
+    }
+
     var includesPastActivity: Bool {
         get { defaults.object(forKey: Key.includesPast) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.includesPast) }
@@ -57,37 +62,28 @@ final class SharedSettings {
         set { defaults.set(newValue, forKey: Key.displayName) }
     }
 
+    /// ID utente restituito dal SyncService (serve all'estensione per il body della probe di rete).
+    var userId: String? {
+        get { defaults.string(forKey: Key.userId) }
+        set { defaults.set(newValue, forKey: Key.userId) }
+    }
+
     /// Esperimento domanda 2: l'estensione prova una richiesta HTTPS.
     var probeNetwork: Bool {
         get { defaults.bool(forKey: Key.probeNetwork) }
         set { defaults.set(newValue, forKey: Key.probeNetwork) }
     }
 
-    /// Esperimento domanda 2: l'estensione prova a scrivere il DayResult su CloudKit.
-    var probeCloudKit: Bool {
-        get { defaults.bool(forKey: Key.probeCloudKit) }
-        set { defaults.set(newValue, forKey: Key.probeCloudKit) }
+    /// Vuoto = GET alla pagina di test Apple. Altrimenti POST JSON del DayResult a questo URL
+    /// (es. un endpoint di test tipo webhook) per simulare la scrittura su un backend.
+    var probeURL: String {
+        get { defaults.string(forKey: Key.probeURL) ?? "" }
+        set { defaults.set(newValue, forKey: Key.probeURL) }
     }
 
-    /// "none" | "owner" | "participant"
-    var role: String {
-        get { defaults.string(forKey: Key.role) ?? "none" }
-        set { defaults.set(newValue, forKey: Key.role) }
-    }
-
-    var zoneName: String? {
-        get { defaults.string(forKey: Key.zoneName) }
-        set { defaults.set(newValue, forKey: Key.zoneName) }
-    }
-
-    var zoneOwnerName: String? {
-        get { defaults.string(forKey: Key.zoneOwner) }
-        set { defaults.set(newValue, forKey: Key.zoneOwner) }
-    }
-
-    /// recordName del CKUserRecord dell'utente in questo container.
-    var userId: String? {
-        get { defaults.string(forKey: Key.userId) }
-        set { defaults.set(newValue, forKey: Key.userId) }
+    /// Esperimento domanda 2: l'estensione pubblica una notifica locale.
+    var probeNotification: Bool {
+        get { defaults.bool(forKey: Key.probeNotification) }
+        set { defaults.set(newValue, forKey: Key.probeNotification) }
     }
 }

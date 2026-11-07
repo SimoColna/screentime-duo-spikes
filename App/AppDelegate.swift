@@ -1,5 +1,4 @@
 import BackgroundTasks
-import CloudKit
 import UIKit
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
@@ -13,41 +12,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskID, using: nil) { task in
             Self.handleAppRefresh(task)
         }
-        // Le push silenziose di CKDatabaseSubscription non richiedono il permesso notifiche.
-        application.registerForRemoteNotifications()
         return true
-    }
-
-    // MARK: Scene (necessaria per ricevere l'accettazione del CKShare in un'app SwiftUI)
-
-    func application(_ application: UIApplication,
-                     configurationForConnecting connectingSceneSession: UISceneSession,
-                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        configuration.delegateClass = SceneDelegate.self
-        return configuration
-    }
-
-    // MARK: Push silenziose CloudKit
-
-    func application(_ application: UIApplication,
-                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        Task { @MainActor in AppModel.shared.appLog("push.registered") }
-    }
-
-    func application(_ application: UIApplication,
-                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        Task { @MainActor in AppModel.shared.appLog("push.registerError", String(describing: error)) }
-    }
-
-    func application(_ application: UIApplication,
-                     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-        let reason = CKNotification(fromRemoteNotificationDictionary: userInfo) != nil ? "ckPush" : "push"
-        Task { @MainActor in
-            let ok = await AppModel.shared.syncNow(reason: reason)
-            completionHandler(ok ? .newData : .failed)
-        }
     }
 
     // MARK: Background refresh (fallback domanda 2)

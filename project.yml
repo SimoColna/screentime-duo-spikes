@@ -1,5 +1,6 @@
 # XcodeGen spec: `brew install xcodegen && xcodegen generate`
-# Bundle ID, Team, App Group e container CloudKit si configurano in Config/Base.xcconfig.
+# Bundle ID, Team e App Group si configurano in Config/Base.xcconfig.
+# Il backend di sync non e' qui: e' dietro il protocollo SyncService (App/Sync).
 name: DuoSpike
 
 options:
@@ -42,27 +43,18 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # Necessario perche' il link d'invito CloudKit apra l'app.
-        CKSharingSupported: true
+        # BGAppRefreshTask per il sync in background (fallback domanda 2).
         UIBackgroundModes:
           - fetch
-          - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - $(PRODUCT_BUNDLE_IDENTIFIER).refresh
         DuoAppGroupID: $(APP_GROUP_ID)
-        DuoCloudKitContainerID: $(CLOUDKIT_CONTAINER_ID)
     entitlements:
       path: App/DuoSpike.entitlements
       properties:
         com.apple.developer.family-controls: true
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
-        com.apple.developer.icloud-container-identifiers:
-          - $(CLOUDKIT_CONTAINER_ID)
-        com.apple.developer.icloud-services:
-          - CloudKit
-        # Per le push silenziose di CKDatabaseSubscription.
-        aps-environment: development
     dependencies:
       - target: DuoMonitor
 
@@ -85,18 +77,12 @@ targets:
           NSExtensionPointIdentifier: com.apple.deviceactivity.monitor-extension
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).DeviceActivityMonitorExtension
         DuoAppGroupID: $(APP_GROUP_ID)
-        DuoCloudKitContainerID: $(CLOUDKIT_CONTAINER_ID)
     entitlements:
       path: Monitor/DuoMonitor.entitlements
       properties:
         com.apple.developer.family-controls: true
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
-        # Serve solo per l'esperimento "scrittura CloudKit diretta dall'estensione" (domanda 2).
-        com.apple.developer.icloud-container-identifiers:
-          - $(CLOUDKIT_CONTAINER_ID)
-        com.apple.developer.icloud-services:
-          - CloudKit
 
 schemes:
   DuoSpike:

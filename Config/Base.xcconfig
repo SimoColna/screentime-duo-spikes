@@ -10,7 +10,6 @@ BUNDLE_ID_PREFIX = com.example.duospike
 
 // Derivati: in genere non serve toccarli.
 APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX)
-CLOUDKIT_CONTAINER_ID = iCloud.$(BUNDLE_ID_PREFIX)
 
 MARKETING_VERSION = 0.1
 CURRENT_PROJECT_VERSION = 1

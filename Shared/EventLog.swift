@@ -6,8 +6,11 @@ enum LogKind {
     static let intervalDidEnd = "intervalDidEnd"
     static let thresholdWarning = "eventWillReachThresholdWarning"
     static let thresholdReached = "eventDidReachThreshold"
+    static let ladderReached = "eventDidReachThreshold.ladder"
+    static let unknownEvent = "eventDidReachThreshold.unknown"
     static let probeNetwork = "probe.network"
-    static let probeCloudKit = "probe.cloudkit"
+    static let probeNotification = "probe.notification"
+    static let monitorStart = "monitor.start"
 }
 
 struct LogEntry: Codable, Identifiable, Hashable {

@@ -1,12 +1,13 @@
-import CloudKit
 import DeviceActivity
 import FamilyControls
 import SwiftUI
 import UIKit
+import UserNotifications
 
 @MainActor
 final class AppModel: ObservableObject {
-    static let shared = AppModel()
+    /// Unico punto in cui si sceglie il backend: per lo spike il fake locale.
+    static let shared = AppModel(sync: LocalFakeSyncService())
 
     // MARK: Stato pubblicato
 
@@ -26,27 +27,38 @@ final class AppModel: ObservableObject {
     @Published var probeNetwork: Bool {
         didSet { settings.probeNetwork = probeNetwork }
     }
-    @Published var probeCloudKit: Bool {
-        didSet { settings.probeCloudKit = probeCloudKit }
+    @Published var probeURL: String {
+        didSet { settings.probeURL = probeURL }
+    }
+    @Published var probeNotification: Bool {
+        didSet {
+            settings.probeNotification = probeNotification
+            if probeNotification { Task { await requestNotificationPermission() } }
+        }
+    }
+    @Published var fakeOffline = false {
+        didSet { fakeSync?.isOffline = fakeOffline }
     }
 
     @Published private(set) var monitoredActivities: [String] = []
     @Published private(set) var log: [LogEntry] = []
-    @Published private(set) var role: CoupleRole
     @Published private(set) var userId: String?
-    @Published private(set) var cloudResults: [DayResult] = []
-    @Published private(set) var participantsDescription = "-"
+    @Published private(set) var pairing: Pairing?
+    @Published private(set) var lastInvite: Invite?
+    @Published private(set) var pairResults: [DayResult] = []
     @Published private(set) var lastSyncDescription = "mai"
     @Published private(set) var lastError: String?
     @Published private(set) var isBusy = false
 
     let settings: SharedSettings
-    let cloud = CloudSync()
+    let sync: SyncService
     private let center = DeviceActivityCenter()
-    private let sharingDelegate = SharingDelegate()
 
-    private init() {
+    var fakeSync: LocalFakeSyncService? { sync as? LocalFakeSyncService }
+
+    init(sync: SyncService) {
         let s = SharedSettings()
+        self.sync = sync
         settings = s
         selection = s.selectionData.flatMap { try? JSONDecoder().decode(FamilyActivitySelection.self, from: $0) }
             ?? FamilyActivitySelection()
@@ -54,19 +66,13 @@ final class AppModel: ObservableObject {
         includesPastActivity = s.includesPastActivity
         displayName = s.displayName.isEmpty ? UIDevice.current.name : s.displayName
         probeNetwork = s.probeNetwork
-        probeCloudKit = s.probeCloudKit
-        role = CoupleRole(rawValue: s.role) ?? .none
+        probeURL = s.probeURL
+        probeNotification = s.probeNotification
         userId = s.userId
-        sharingDelegate.onEvent = { [weak self] message in self?.appLog("sharing", message) }
         refresh()
     }
 
     // MARK: Derivati
-
-    var zoneID: CKRecordZone.ID? {
-        guard let name = settings.zoneName, let owner = settings.zoneOwnerName else { return nil }
-        return CKRecordZone.ID(zoneName: name, ownerName: owner)
-    }
 
     var localResults: [DayResult] {
         DayResult.local(from: log, userId: userId ?? "unknown", displayName: displayName,
@@ -74,8 +80,11 @@ final class AppModel: ObservableObject {
                         startDay: settings.monitoringStartDay)
     }
 
-    var myCloudResults: [DayResult] { cloudResults.filter { $0.userId == userId } }
-    var partnerResults: [DayResult] { cloudResults.filter { $0.userId != userId } }
+    var myRemoteResults: [DayResult] { pairResults.filter { $0.userId == userId } }
+    var partnerResults: [DayResult] { pairResults.filter { $0.userId != userId } }
+    var partner: PairMember? { userId.flatMap { pairing?.partner(of: $0) } }
+
+    var diagnoses: [ThresholdDiagnostics.Day] { ThresholdDiagnostics.diagnose(log: log) }
 
     var authStatusText: String {
         switch authStatus {
@@ -91,10 +100,12 @@ final class AppModel: ObservableObject {
     }
 
     var activeThresholdText: String {
-        settings.activeThresholdMinutes.map { "\($0) min" } ?? "-"
+        guard let minutes = settings.activeThresholdMinutes else { return "-" }
+        let ladder = settings.activeLadderPercents.map { "\($0)%" }.joined(separator: "/")
+        return ladder.isEmpty ? "\(minutes) min" : "\(minutes) min (gradini \(ladder))"
     }
 
-    // MARK: Azioni
+    // MARK: Screen Time
 
     func refresh() {
         authStatus = AuthorizationCenter.shared.authorizationStatus
@@ -124,32 +135,41 @@ final class AppModel: ObservableObject {
             intervalEnd: DateComponents(hour: 23, minute: 59),
             repeats: true
         )
-        let threshold = DateComponents(minute: thresholdMinutes)
-        let event: DeviceActivityEvent
-        if #available(iOS 17.4, *) {
-            event = DeviceActivityEvent(applications: selection.applicationTokens,
-                                        categories: selection.categoryTokens,
-                                        webDomains: selection.webDomainTokens,
-                                        threshold: threshold,
-                                        includesPastActivity: includesPastActivity)
-        } else {
-            event = DeviceActivityEvent(applications: selection.applicationTokens,
-                                        categories: selection.categoryTokens,
-                                        webDomains: selection.webDomainTokens,
-                                        threshold: threshold)
+        let steps = ThresholdDiagnostics.steps(for: thresholdMinutes)
+        var events: [DeviceActivityEvent.Name: DeviceActivityEvent] = [.threshold: makeEvent(minutes: thresholdMinutes)]
+        for step in steps {
+            events[.ladder(step.percent)] = makeEvent(minutes: step.minutes)
         }
         do {
             // Sovrascrive eventuale schedule/eventi precedenti con lo stesso nome.
-            try center.startMonitoring(.daily, during: schedule, events: [.threshold: event])
+            try center.startMonitoring(.daily, during: schedule, events: events)
             settings.activeThresholdMinutes = thresholdMinutes
+            settings.activeLadderPercents = steps.map(\.percent)
             if settings.monitoringStartDay == nil {
                 settings.monitoringStartDay = DayKey.string(from: Date())
             }
-            appLog("monitor.start", "soglia \(thresholdMinutes) min, \(selectionSummary), includesPastActivity=\(includesPastActivity)")
+            let ladder = steps.map { "\($0.percent)%=\($0.minutes)m" }.joined(separator: " ")
+            appLog(LogKind.monitorStart, "soglia \(thresholdMinutes) min [\(ladder)], \(selectionSummary), includesPastActivity=\(includesPastActivity)")
         } catch {
             appLog("monitor.error", String(describing: error))
         }
         refresh()
+    }
+
+    private func makeEvent(minutes: Int) -> DeviceActivityEvent {
+        let threshold = DateComponents(minute: minutes)
+        if #available(iOS 17.4, *) {
+            return DeviceActivityEvent(applications: selection.applicationTokens,
+                                       categories: selection.categoryTokens,
+                                       webDomains: selection.webDomainTokens,
+                                       threshold: threshold,
+                                       includesPastActivity: includesPastActivity)
+        } else {
+            return DeviceActivityEvent(applications: selection.applicationTokens,
+                                       categories: selection.categoryTokens,
+                                       webDomains: selection.webDomainTokens,
+                                       threshold: threshold)
+        }
     }
 
     func stopMonitoring() {
@@ -163,101 +183,84 @@ final class AppModel: ObservableObject {
         refresh()
     }
 
-    // MARK: Coppia
-
-    func createCoupleAndInvite() async {
-        await busy {
-            let (zoneID, share) = try await self.cloud.createZoneAndShare()
-            self.setCouple(role: .owner, zoneID: zoneID)
-            self.appLog("couple.owner", "zona \(zoneID.zoneName) creata, share \(share.recordID.recordName)")
-            self.presentSharingController(share)
+    private func requestNotificationPermission() async {
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            appLog("notifications.auth", granted ? "granted" : "denied")
+        } catch {
+            appLog("notifications.auth", String(describing: error))
         }
     }
 
-    func copyPublicLink() async {
+    // MARK: Coppia (via SyncService)
+
+    func createInvite() async {
         await busy {
-            guard let zoneID = self.zoneID else { throw CloudSyncError.noCouple }
-            let existing = try await self.cloud.fetchShare(zoneID: zoneID)
-            let share = try await self.cloud.makePublicReadWrite(existing)
-            if let url = share.url {
-                UIPasteboard.general.url = url
-                self.appLog("sharing", "link pubblico copiato: \(url.absoluteString)")
-            } else {
-                self.appLog("sharing", "share senza URL")
-            }
+            let invite = try await self.sync.createInvite(displayName: self.displayName)
+            self.lastInvite = invite
+            self.pairing = try await self.sync.pairing()
+            self.appLog("pair.invite", "codice \(invite.code)")
         }
+        await syncNow(reason: "invite")
     }
 
-    func acceptShare(_ metadata: CKShare.Metadata) async {
+    func acceptInvite(code: String) async {
         await busy {
-            let zoneID = try await self.cloud.accept(metadata)
-            self.setCouple(role: .participant, zoneID: zoneID)
-            self.appLog("couple.participant", "accettato share di \(zoneID.ownerName)")
+            self.pairing = try await self.sync.acceptInvite(code: code, displayName: self.displayName)
+            self.appLog("pair.accept", "codice \(code)")
         }
         await syncNow(reason: "accept")
     }
 
-    func discoverSharedZone() async {
+    func leavePair() async {
         await busy {
-            let zoneID = try await self.cloud.discoverSharedZone()
-            self.setCouple(role: .participant, zoneID: zoneID)
-            self.appLog("couple.participant", "zona trovata nel DB condiviso, owner \(zoneID.ownerName)")
+            try await self.sync.leavePair()
+            self.pairing = nil
+            self.pairResults = []
+            self.lastInvite = nil
+            self.appLog("pair.leave")
         }
     }
 
-    func resetCoupleLocally() {
-        settings.role = CoupleRole.none.rawValue
-        settings.zoneName = nil
-        settings.zoneOwnerName = nil
-        role = .none
-        cloudResults = []
-        appLog("couple.reset")
+    /// Solo con il backend finto: imposta lo stato di oggi del partner simulato.
+    func simulatePartnerToday(exceeded: Bool) async {
+        fakeSync?.simulatePartner(day: DayKey.string(from: Date()), exceeded: exceeded, threshold: 30)
+        await syncNow(reason: "simulazione")
     }
 
-    private func setCouple(role: CoupleRole, zoneID: CKRecordZone.ID) {
-        settings.role = role.rawValue
-        settings.zoneName = zoneID.zoneName
-        settings.zoneOwnerName = zoneID.ownerName
-        self.role = role
-    }
-
-    private func presentSharingController(_ share: CKShare) {
-        guard let top = UIApplication.shared.topViewController else {
-            appLog("sharing", "nessun view controller per presentare UICloudSharingController")
-            return
-        }
-        let controller = UICloudSharingController(share: share, container: cloud.container)
-        controller.availablePermissions = [.allowReadWrite, .allowPrivate]
-        controller.delegate = sharingDelegate
-        top.present(controller, animated: true)
+    func wipeFakeBackend() {
+        fakeSync?.wipe()
+        settings.userId = nil
+        userId = nil
+        pairing = nil
+        pairResults = []
+        lastInvite = nil
+        appLog("fake.wipe")
     }
 
     // MARK: Sync
 
-    /// Pubblica i DayResult locali e scarica quelli di entrambi. Usata in foreground, da push e da BGAppRefresh.
+    /// Pubblica i DayResult ricalcolati dal log e scarica quelli della coppia.
+    /// Chiamata in foreground, da BGAppRefresh e a mano. Idempotente: nessuna coda di invio.
     @discardableResult
     func syncNow(reason: String) async -> Bool {
         refresh()
         do {
             if userId == nil {
-                let id = try await cloud.fetchUserId()
+                let id = try await sync.currentUserId()
                 userId = id
                 settings.userId = id
             }
-            guard role != .none, let zoneID else {
+            pairing = try await sync.pairing()
+            guard pairing != nil else {
                 lastSyncDescription = "\(Self.timeString(Date())) (\(reason)): nessuna coppia"
                 return true
             }
             let mine = localResults
-            try await cloud.save(mine, role: role, zoneID: zoneID)
-            cloudResults = try await cloud.fetchAll(role: role, zoneID: zoneID)
-                .sorted { ($0.date, $0.userId) > ($1.date, $1.userId) }
-            try? await cloud.ensureSubscription(role: role)
-            if role == .owner, let share = try? await cloud.fetchShare(zoneID: zoneID) {
-                participantsDescription = Self.describe(share)
-            }
+            try await sync.upload(mine)
+            pairResults = try await sync.fetchPairResults(days: 7)
             lastError = nil
-            lastSyncDescription = "\(Self.timeString(Date())) (\(reason)): inviati \(mine.count), ricevuti \(cloudResults.count)"
+            lastSyncDescription = "\(Self.timeString(Date())) (\(reason)): inviati \(mine.count), ricevuti \(pairResults.count)"
             appLog("sync.ok", lastSyncDescription)
             return true
         } catch {
@@ -279,55 +282,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func describe(_ share: CKShare) -> String {
-        share.participants.map { p in
-            let name = p.userIdentity.nameComponents.map {
-                PersonNameComponentsFormatter.localizedString(from: $0, style: .default)
-            } ?? p.userIdentity.userRecordID?.recordName ?? "?"
-            let status: String
-            switch p.acceptanceStatus {
-            case .accepted: status = "accepted"
-            case .pending: status = "pending"
-            case .removed: status = "removed"
-            default: status = "unknown"
-            }
-            let isOwner = p.role == .owner ? " [owner]" : ""
-            return "\(name): \(status)\(isOwner)"
-        }.joined(separator: "\n")
-    }
-
     static func timeString(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .standard)
-    }
-}
-
-// MARK: - UIKit helpers
-
-final class SharingDelegate: NSObject, UICloudSharingControllerDelegate {
-    var onEvent: ((String) -> Void)?
-
-    func cloudSharingController(_ csc: UICloudSharingController,
-                                failedToSaveShareWithError error: Error) {
-        onEvent?("failedToSaveShare: \(error)")
-    }
-
-    func itemTitle(for csc: UICloudSharingController) -> String? { "Duo Spike" }
-
-    func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {
-        onEvent?("didSaveShare")
-    }
-
-    func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
-        onEvent?("didStopSharing")
-    }
-}
-
-extension UIApplication {
-    var topViewController: UIViewController? {
-        let scenes = connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first?.windows.first
-        var top = window?.rootViewController
-        while let presented = top?.presentedViewController { top = presented }
-        return top
     }
 }
